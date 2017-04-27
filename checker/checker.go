@@ -8,10 +8,12 @@ import (
 
 	"github.com/haya14busa/gosum"
 	"golang.org/x/tools/go/types/typeutil"
-	"honnef.co/go/lint"
+	"honnef.co/go/tools/lint"
 )
 
-type Checker struct{}
+type Checker struct {
+	CheckGenerated bool
+}
 
 func NewChecker() *Checker {
 	return &Checker{}
@@ -21,14 +23,32 @@ func (c *Checker) Init(*lint.Program) {}
 
 func (c *Checker) Funcs() map[string]lint.Func {
 	return map[string]lint.Func{
-		"SA1000": CheckSwitch,
+		"SA1000": c.CheckSwitch,
 	}
 }
 
+func (c *Checker) filterGenerated(files []*ast.File) []*ast.File {
+	if c.CheckGenerated {
+		return files
+	}
+	var out []*ast.File
+	for _, f := range files {
+		if !lint.IsGenerated(f) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
 // CheckSwitch checkes possible missed cases for type switch statement.
-func CheckSwitch(f *lint.File) {
-	all := typeutil.Dependencies(f.Pkg.TypesPkg)
-	info := f.Pkg.TypesInfo
+func (c *Checker) CheckSwitch(j *lint.Job) {
+	info := j.Program.Info
+	pkgs := j.Program.Packages
+	packages := make([]*types.Package, 0, len(pkgs))
+	for _, pkg := range pkgs {
+		packages = append(packages, pkg.Package.Pkg)
+	}
+	all := typeutil.Dependencies(packages...)
 
 	fn := func(node ast.Node) bool {
 		typeswitch, ok := node.(*ast.TypeSwitchStmt)
@@ -107,18 +127,20 @@ func CheckSwitch(f *lint.File) {
 				typs[i] = types.NewPointer(typ).String()
 			}
 			if confidence > 0.8 {
-				f.Errorf(typeswitch, "uncovered cases for %v type switch:\n\t- %v", named.String(), strings.Join(typs, "\n\t- "))
+				j.Errorf(typeswitch, "uncovered cases for %v type switch:\n\t- %v", named.String(), strings.Join(typs, "\n\t- "))
 			}
 		}
 
 		return true
 	}
-	f.Walk(fn)
+	for _, f := range c.filterGenerated(j.Program.Files) {
+		ast.Inspect(f, fn)
+	}
 }
 
 // switchInterfaceType returns interface type of type switch statement. It may
 // return nil.
-func switchInterfaceType(node *ast.TypeSwitchStmt, info types.Info) *types.Named {
+func switchInterfaceType(node *ast.TypeSwitchStmt, info *types.Info) *types.Named {
 	ae := assertExpr(node)
 	if ae == nil {
 		return nil

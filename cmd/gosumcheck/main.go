@@ -4,7 +4,7 @@ import (
 	"os"
 
 	"github.com/haya14busa/gosum/checker"
-	"honnef.co/go/lint/lintutil"
+	"honnef.co/go/tools/lint/lintutil"
 )
 
 func main() {
